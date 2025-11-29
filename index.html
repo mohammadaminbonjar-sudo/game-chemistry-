@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>شیمیدان دونده</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #222; font-family: Tahoma, sans-serif; user-select: none; }
+        
+        /* صفحه شروع */
+        #start-screen {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(135deg, #1a2a6c, #b21f1f, #fdbb2d);
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            z-index: 10; color: white;
+        }
+        input, button { padding: 10px; margin: 10px; border-radius: 5px; border: none; font-size: 16px; }
+        button { background-color: #4CAF50; color: white; cursor: pointer; font-weight: bold; }
+        
+        /* رابط کاربری بازی */
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; display: none; }
+        #score-board { position: absolute; top: 20px; left: 20px; color: white; font-size: 24px; font-weight: bold; text-shadow: 2px 2px 4px #000; }
+        #game-over { 
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); 
+            color: white; font-size: 30px; background: rgba(0,0,0,0.8); padding: 20px; 
+            border-radius: 10px; text-align: center; display: none; pointer-events: auto;
+        }
+
+        /* کنترل‌های لمسی موبایل */
+        #controls {
+            position: absolute; bottom: 20px; width: 100%; height: 150px;
+            display: flex; justify-content: space-between; padding: 0 20px; box-sizing: border-box;
+            pointer-events: auto;
+        }
+        .control-btn {
+            width: 80px; height: 80px; background: rgba(255, 255, 255, 0.3);
+            border-radius: 50%; border: 2px solid white; display: flex;
+            align-items: center; justify-content: center; font-size: 30px; color: white;
+            user-select: none; -webkit-user-select: none;
+        }
+        .control-btn:active { background: rgba(255, 255, 255, 0.6); }
+        
+        #jump-btn { position: absolute; bottom: 30px; right: 30px; width: 90px; height: 90px; background: rgba(255, 100, 100, 0.4); }
+        #left-btn { position: absolute; bottom: 30px; left: 30px; }
+        #right-btn { position: absolute; bottom: 30px; left: 130px; }
+
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+
+    <div id="start-screen">
+        <h1>شیمیدان دونده 🧪</h1>
+        <p>لطفا نام و عکس خود را وارد کنید</p>
+        <input type="text" id="username" placeholder="نام بازیکن">
+        <label for="user-face" style="background: white; color: black; padding: 10px; border-radius: 5px; cursor: pointer;">
+            📷 آپلود عکس چهره
+        </label>
+        <input type="file" id="user-face" accept="image/*" style="display: none;">
+        <div id="preview-container" style="margin-top:10px;"></div>
+        <button onclick="startGame()">شروع بازی</button>
+    </div>
+
+    <div id="ui-layer">
+        <div id="score-board">امتیاز: 0</div>
+        
+        <div id="controls">
+            <div id="left-btn" class="control-btn">⬅️</div>
+            <div id="right-btn" class="control-btn">➡️</div>
+            <div id="jump-btn" class="control-btn">🦘</div>
+        </div>
+
+        <div id="game-over">
+            <p>💥 برخورد با عنصر ناپایدار! 💥</p>
+            <p id="final-score"></p>
+            <button onclick="location.reload()">تلاش مجدد</button>
+        </div>
+    </div>
+
+    <script>
+        let scene, camera, renderer, player, ground;
+        let obstacles = [];
+        let score = 0;
+        let gameRunning = false;
+        let speed = 0.5;
+        let playerFaceTexture = null;
+        let animationId;
+        
+        // متغیرهای حرکت
+        let lane = 0; // -1 (چپ), 0 (وسط), 1 (راست)
+        const laneWidth = 3;
+        let isJumping = false;
+        let jumpVelocity = 0;
+        const gravity = 0.02;
+
+        // عناصر شیمیایی برای موانع
+        const elements = ["H", "He", "Li", "Be", "B", "C", "N", "O", "F", "Ne", "Na", "Mg", "Al", "Si", "P", "S", "Cl", "Ar"];
+        const elementColors = [0xff0000, 0x00ff00, 0x0000ff, 0xffff00, 0xff00ff, 0x00ffff];
+
+        // پیش‌نمایش عکس آپلود شده
+        document.getElementById('user-face').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function(event) {
+                    const img = document.createElement('img');
+                    img.src = event.target.result;
+                    img.style.width = "50px"; img.style.height = "50px"; img.style.borderRadius = "50%";
+                    const container = document.getElementById('preview-container');
+                    container.innerHTML = '';
+                    container.appendChild(img);
+                    
+                    // ساخت تکسچر برای Three.js
+                    const loader = new THREE.TextureLoader();
+                    playerFaceTexture = loader.load(event.target.result);
+                }
+                reader.readAsDataURL(file);
+            }
+        });
+
+        function startGame() {
+            const name = document.getElementById('username').value;
+            if(!name) { alert("لطفا نام خود را وارد کنید!"); return; }
+            
+            document.getElementById('start-screen').style.display = 'none';
+            document.getElementById('ui-layer').style.display = 'block';
+            
+            initGame();
+            animate();
+        }
+function initGame() {
+    gameRunning = true;
+    // کد زیر را برای حل مشکل امنیتی WebView اضافه کنید
+    THREE.ImageUtils.crossOrigin = 'anonymous'; 
+
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x87CEEB); // رنگ آسمان
+            scene.fog = new THREE.Fog(0x87CEEB, 10, 50);
+
+            // دوربین
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
+            camera.position.set(0, 3, 6);
+            camera.lookAt(0, 1, 0);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            document.body.appendChild(renderer.domElement);
+
+            // نورپردازی
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight.position.set(5, 10, 7);
+            dirLight.castShadow = true;
+            scene.add(dirLight);
+
+            // زمین
+            const groundGeo = new THREE.PlaneGeometry(50, 1000);
+            const groundMat = new THREE.MeshPhongMaterial({ color: 0x333333 });
+            ground = new THREE.Mesh(groundGeo, groundMat);
+            ground.rotation.x = -Math.PI / 2;
+            ground.receiveShadow = true;
+            scene.add(ground);
+
+            // خطوط مسیر (تزئینی)
+            const lineGeo = new THREE.PlaneGeometry(0.2, 1000);
+            const lineMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+            const lineLeft = new THREE.Mesh(lineGeo, lineMat);
+            lineLeft.position.set(-1.5, 0.01, -500);
+            lineLeft.rotation.x = -Math.PI / 2;
+            scene.add(lineLeft);
+            const lineRight = new THREE.Mesh(lineGeo, lineMat);
+            lineRight.position.set(1.5, 0.01, -500);
+            lineRight.rotation.x = -Math.PI / 2;
+            scene.add(lineRight);
+
+            createPlayer();
+            
+            // گوش‌دادن به دکمه‌ها
+            document.getElementById('left-btn').addEventListener('touchstart', moveLeft);
+            document.getElementById('left-btn').addEventListener('mousedown', moveLeft);
+            
+            document.getElementById('right-btn').addEventListener('touchstart', moveRight);
+            document.getElementById('right-btn').addEventListener('mousedown', moveRight);
+            
+            document.getElementById('jump-btn').addEventListener('touchstart', jump);
+            document.getElementById('jump-btn').addEventListener('mousedown', jump);
+            
+            // کیبورد برای تست در ویندوز
+            window.addEventListener('keydown', (e) => {
+                if(e.key === "ArrowLeft") moveLeft();
+                if(e.key === "ArrowRight") moveRight();
+                if(e.key === "ArrowUp" || e.code === "Space") jump();
+            });
+        }
+
+        function createPlayer() {
+            player = new THREE.Group();
+
+            // بدن
+            const bodyGeo = new THREE.BoxGeometry(0.8, 1.2, 0.5);
+            const bodyMat = new THREE.MeshPhongMaterial({ color: 0xffffff }); // لباس آزمایشگاه
+            const body = new THREE.Mesh(bodyGeo, bodyMat);
+            body.position.y = 0.6;
+            body.castShadow = true;
+            player.add(body);
+
+            // سر
+            const headGeo = new THREE.BoxGeometry(0.6, 0.6, 0.6);
+            // اگر کاربر عکس آپلود کرده باشد استفاده کن، وگرنه رنگ پوست
+            const headMat = playerFaceTexture 
+                ? [
+                    new THREE.MeshBasicMaterial({ color: 0xffccaa }), // Right
+                    new THREE.MeshBasicMaterial({ color: 0xffccaa }), // Left
+                    new THREE.MeshBasicMaterial({ color: 0xffccaa }), // Top
+                    new THREE.MeshBasicMaterial({ color: 0xffccaa }), // Bottom
+                    new THREE.MeshBasicMaterial({ map: playerFaceTexture }), // Front (صورت)
+                    new THREE.MeshBasicMaterial({ color: 0xffccaa })  // Back
+                  ]
+                : new THREE.MeshPhongMaterial({ color: 0xffccaa });
+                
+            const head = new THREE.Mesh(headGeo, headMat);
+            head.position.y = 1.5;
+            player.add(head);
+
+            scene.add(player);
+        }
+
+        // ایجاد تکسچر داینامیک برای عناصر شیمی
+        function createTextTexture(text, colorHex) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 128; canvas.height = 128;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#' + new THREE.Color(colorHex).getHexString();
+            ctx.fillRect(0, 0, 128, 128);
+            ctx.fillStyle = 'white';
+            ctx.font = 'bold 60px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(text, 64, 64);
+            // اضافه کردن حاشیه
+            ctx.lineWidth = 5;
+            ctx.strokeStyle = "white";
+            ctx.strokeRect(5,5,118,118);
+            
+            const texture = new THREE.CanvasTexture(canvas);
+            return texture;
+        }
+
+        function spawnObstacle() {
+            const elIndex = Math.floor(Math.random() * elements.length);
+            const elColor = elementColors[Math.floor(Math.random() * elementColors.length)];
+            
+            const texture = createTextTexture(elements[elIndex], elColor);
+            const geo = new THREE.BoxGeometry(1.5, 1.5, 1.5);
+            const mat = new THREE.MeshPhongMaterial({ map: texture });
+            
+            const obstacle = new THREE.Mesh(geo, mat);
+            
+            // موقعیت تصادفی در 3 لاین
+            const r = Math.random();
+            let obsLane = 0;
+            if (r < 0.33) obsLane = -1;
+            else if (r > 0.66) obsLane = 1;
+
+            obstacle.position.set(obsLane * laneWidth, 0.75, player.position.z - 60);
+            obstacle.castShadow = true;
+            
+            scene.add(obstacle);
+            obstacles.push(obstacle);
+        }
+
+        // منطق حرکت
+        function moveLeft() { if(lane > -1) lane--; }
+        function moveRight() { if(lane < 1) lane++; }
+        function jump() { 
+            if(!isJumping) {
+                isJumping = true;
+                jumpVelocity = 0.4;
+            }
+        }
+
+        function update() {
+            if(!gameRunning) return;
+
+            // حرکت بازیکن به جلو
+            player.position.z -= speed;
+            camera.position.z -= speed;
+            ground.position.z = player.position.z; // زمین با بازیکن حرکت کند
+
+            // حرکت نرم به چپ و راست (Lerp)
+            const targetX = lane * laneWidth;
+            player.position.x += (targetX - player.position.x) * 0.1;
+            camera.position.x += (targetX * 0.5 - camera.position.x) * 0.1; // دوربین کمی دنبال کند
+
+            // فیزیک پرش
+            if(isJumping) {
+                player.position.y += jumpVelocity;
+                jumpVelocity -= gravity;
+                if(player.position.y <= 0) {
+                    player.position.y = 0;
+                    isJumping = false;
+                }
+            } else {
+                player.position.y = 0;
+            }
+
+            // تولید مانع
+            if(Math.random() < 0.03) spawnObstacle();
+
+            // مدیریت موانع و برخورد
+            for(let i = obstacles.length - 1; i >= 0; i--) {
+                let obs = obstacles[i];
+                
+                // حذف موانع رد شده
+                if(obs.position.z > player.position.z + 10) {
+                    scene.remove(obs);
+                    obstacles.splice(i, 1);
+                    score += 10;
+                    document.getElementById('score-board').innerText = "امتیاز: " + score;
+                    speed += 0.0005; // افزایش سرعت بازی
+                }
+
+                // تشخیص برخورد
+                // فاصله ساده اقلیدسی
+                const dx = player.position.x - obs.position.x;
+                const dz = player.position.z - obs.position.z;
+                const dy = player.position.y - obs.position.y;
+                
+                // محدوده برخورد (Hitbox)
+                if(Math.abs(dx) < 1.0 && Math.abs(dz) < 1.0 && Math.abs(dy) < 1.0) {
+                    gameOver();
+                }
+            }
+        }
+
+        function gameOver() {
+            gameRunning = false;
+            cancelAnimationFrame(animationId);
+            document.getElementById('game-over').style.display = 'block';
+            document.getElementById('final-score').innerText = "امتیاز نهایی: " + score;
+        }
+
+        function animate() {
+            if(!gameRunning) return;
+            animationId = requestAnimationFrame(animate);
+            update();
+            renderer.render(scene, camera);
+        }
+
+        // ریسپانسیو بودن صفحه
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+    </script>
+</body>
+</html>
